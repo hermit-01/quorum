@@ -22,12 +22,13 @@ import type {
   IMicrophoneAudioTrack,
 } from 'agora-rtc-sdk-ng'
 import { installAgoraSdpCompatibility } from '@/transport/rtcSdp'
+import { AudioActivity } from '@/transport/audioActivity'
 
 /** The candidate's RTC identity. Agents are 1001 upward. */
 export const CANDIDATE_RTC_UID = 1000
 
 export interface RtcChannelHandlers {
-  /** An interviewer started or stopped publishing audio. Drives the tally lamps. */
+  /** Actual voice activity, with a short hold through pauses between words. */
   onAgentAudio?: (uid: number, speaking: boolean) => void
   /** Connection state, so the UI can stop claiming to be live when it is not. */
   onConnection?: (state: string) => void
@@ -59,6 +60,8 @@ export class RtcChannel {
   private handlers: RtcChannelHandlers = {}
   private joinedChannel = ''
   private speaking = new Set<number>()
+  private activity = new AudioActivity()
+  private audioTimer: ReturnType<typeof setInterval> | null = null
   private restoreCreateOffer: (() => void) | null = null
 
   /**
@@ -107,7 +110,7 @@ export class RtcChannel {
     }
   }
 
-  /** Which interviewer uids are publishing audio right now. */
+  /** Which interviewer uids are audibly speaking right now. */
   get speakingUids(): number[] {
     return [...this.speaking]
   }
@@ -161,7 +164,6 @@ export class RtcChannel {
           await client.subscribe(user, mediaType)
         // An interviewer's voice. Play it: this is the panel being heard.
         user.audioTrack?.play()
-        this.markSpeaking(user, true)
         } catch {
           this.fail('Could not play interviewer audio. Check your connection and restart the interview.')
         }
@@ -175,6 +177,11 @@ export class RtcChannel {
       client.on('user-left', (user) => this.markSpeaking(user, false))
 
       client.on('connection-state-change', (state) => {
+        if (state !== 'CONNECTED') {
+          for (const uid of this.speaking) this.handlers.onAgentAudio?.(uid, false)
+          this.speaking.clear()
+          this.activity.clear()
+        }
         this.handlers.onConnection?.(state)
       })
 
@@ -205,6 +212,13 @@ export class RtcChannel {
       await client.publish([this.mic])
 
       this.joinedChannel = grant.channel
+      this.audioTimer = setInterval(() => {
+        if (client.connectionState !== 'CONNECTED') return
+        for (const user of client.remoteUsers) {
+          const state = this.activity.sample(Number(user.uid), user.audioTrack?.getVolumeLevel() ?? 0, Date.now())
+          if (state !== undefined) this.markSpeaking(user, state)
+        }
+      }, 100)
       return true
     } catch (error) {
       this.fail(error instanceof Error ? error.message : 'RTC join failed')
@@ -226,6 +240,10 @@ export class RtcChannel {
   }
 
   private async doLeave(): Promise<void> {
+    if (this.audioTimer) clearInterval(this.audioTimer)
+    this.audioTimer = null
+    for (const uid of this.speaking) this.handlers.onAgentAudio?.(uid, false)
+    this.activity.clear()
     try {
       if (this.mic) {
         this.mic.stop()
@@ -248,6 +266,8 @@ export class RtcChannel {
 
   private markSpeaking(user: IAgoraRTCRemoteUser, speaking: boolean): void {
     const uid = Number(user.uid)
+    if (!speaking) this.activity.remove(uid)
+    if (speaking === this.speaking.has(uid)) return
     if (speaking) this.speaking.add(uid)
     else this.speaking.delete(uid)
     this.handlers.onAgentAudio?.(uid, speaking)

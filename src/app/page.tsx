@@ -8,9 +8,10 @@
  * deciding, and the tally lamps go red together.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AGENT_IDS,
+  AGENTS,
   CANDIDATE_UID,
   DEFAULT_CHANNEL,
   EMPTY_BRIEF,
@@ -37,7 +38,7 @@ import { chooseBrain, type Brain } from '@/agents/choose'
 import { CandidateEar } from '@/speech'
 import { SourceRack, type SourceView } from '@/components/SourceRack'
 import { BriefPanel, FloorStrip, Meters, TranscriptFeed } from '@/components/Panels'
-import { Ledger, Report } from '@/components/Report'
+import { Report } from '@/components/Report'
 import { Icon, QuorumMark, VoiceOrbit } from '@/components/InterviewVisuals'
 
 const idleSources = (): Record<AgentId, SourceView> =>
@@ -103,7 +104,7 @@ export default function Gallery() {
   const [channelName, setChannelName] = useState(DEFAULT_CHANNEL.channelName)
   const [sources, setSources] = useState(idleSources)
   const [decision, setDecision] = useState<FloorDecision | null>(null)
-  const [decisions, setDecisions] = useState<FloorDecision[]>([])
+  const [audibleAgents, setAudibleAgents] = useState<ReadonlySet<AgentId>>(new Set())
   const [transcript, setTranscript] = useState<readonly TranscriptEvent[]>([])
   const [brief, setBrief] = useState<Brief>(EMPTY_BRIEF)
   const [metrics, setMetrics] = useState<Metrics>(EMPTY_METRICS)
@@ -118,7 +119,6 @@ export default function Gallery() {
   const [listening, setListening] = useState(false)
   const [hearing, setHearing] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
-  const [voiceSupported, setVoiceSupported] = useState(false)
   const [agoraLive, setAgoraLive] = useState(false)
   const [rtcJoined, setRtcJoined] = useState(false)
   const [llmLive, setLlmLive] = useState(false)
@@ -152,7 +152,7 @@ export default function Gallery() {
           systemPrompt: buildSystemPrompt(id),
         })),
       )
-      .then(() => { if (active) setVoiceSupported(true) })
+      .catch(() => { if (active) setNotice('Simulated voices could not initialize. Please refresh to retry.') })
 
     // If the server holds Agora credentials, say so rather than overselling --
     // and if it does, actually join the channel so the candidate is a real
@@ -212,7 +212,6 @@ export default function Gallery() {
     setTranscript([...session.transcript.all()])
     setBrief(session.brief.current())
     setMetrics(session.metrics())
-    setDecisions([...session.coordinator.log()])
     setYieldedIds(new Set(session.yieldedEventIds()))
   }, [])
 
@@ -229,6 +228,7 @@ export default function Gallery() {
     setListening(false)
     setHearing('')
     setSources(idleSources)
+    setAudibleAgents(new Set())
     setEndReason(reason)
     setPhase('closed')
     refresh()
@@ -282,6 +282,20 @@ export default function Gallery() {
       if (!grant) { refresh(); return }
       setDecision(grant)
       refresh()
+
+      // Live speech has already played inside the session. Keep its words,
+      // but let RTC audio activity alone control the live speaking indicators.
+      if (transport.generatesOwnLines) {
+        setSources(previous => {
+          const next = { ...previous }
+          for (const utterance of step.utterances) {
+            const id = utterance.speaker as AgentId
+            next[id] = { ...next[id], state: 'idle', line: utterance.text, cutIn: false }
+          }
+          return next
+        })
+        return
+      }
 
       // 1 — the bids land, before anything is decided.
       setSources((previous) => {
@@ -443,7 +457,24 @@ export default function Gallery() {
       }
 
       const rtc = rtcRef.current
-      if (!rtc || (!rtc.joined && !await rtc.join(channelRef.current, { onError: setNotice }))) {
+      if (!rtc || (!rtc.joined && !await rtc.join(channelRef.current, {
+        onError: setNotice,
+        onConnection: state => {
+          setRtcJoined(state === 'CONNECTED')
+          if (state !== 'CONNECTED') setAudibleAgents(new Set())
+        },
+        onAgentAudio: (uid, speaking) => {
+          const id = AGENT_IDS[uid - 1001]
+          if (!id) return
+          setAudibleAgents(previous => {
+            if (previous.has(id) === speaking) return previous
+            const next = new Set(previous)
+            if (speaking) next.add(id)
+            else next.delete(id)
+            return next
+          })
+        },
+      }))) {
         throw new Error('Could not connect your microphone to the interview. Check browser permission and start again.')
       }
       setRtcJoined(true)
@@ -491,7 +522,7 @@ export default function Gallery() {
     setCleanupFailed(false)
     setSources(idleSources)
     setDecision(null)
-    setDecisions([])
+    setAudibleAgents(new Set())
     setTranscript([])
     setBrief(EMPTY_BRIEF)
     setMetrics(EMPTY_METRICS)
@@ -575,7 +606,7 @@ export default function Gallery() {
       setMode(nextMode)
       setSources(idleSources)
       setDecision(null)
-      setDecisions([])
+      setAudibleAgents(new Set())
       setTranscript([])
       setBrief(EMPTY_BRIEF)
       setMetrics(EMPTY_METRICS)
@@ -592,16 +623,13 @@ export default function Gallery() {
 
   useEffect(() => () => earRef.current?.stop(), [])
 
-  const requirementState = useMemo(
-    () => ({
-      transcript,
-      brief,
-      decisions,
-      reportShown: assessment !== null,
-      voiceSupported,
-    }),
-    [transcript, brief, decisions, assessment, voiceSupported],
-  )
+  const visibleSources = Object.fromEntries(AGENT_IDS.map(id => [id, {
+    ...sources[id],
+    state: phase !== 'live' ? 'idle' : agoraLive ? (audibleAgents.has(id) ? 'air' : 'idle') : sources[id].state,
+  }])) as Record<AgentId, SourceView>
+  const speakers = AGENT_IDS.filter(id => visibleSources[id].state === 'air')
+  const speakingLabel = speakers.map(id => AGENTS[id].displayName).join(' & ')
+  const orbitState = phase !== 'live' ? phase : speakers.length ? 'speaking' : thinking || busy ? 'thinking' : muted ? 'muted' : 'listening'
 
   return (
     <main className="shell">
@@ -639,8 +667,8 @@ export default function Gallery() {
           You are speaking with AI interviewers, not people.
         </span>
 
-      <SourceRack sources={sources}>
-        <VoiceOrbit active={phase === 'live' && !muted} muted={muted} label={phase === 'closed' ? 'Interview complete' : phase === 'idle' ? 'Your place in the conversation' : thinking ? 'The panel is thinking' : busy ? 'The panel has the floor' : muted ? 'Microphone muted' : 'Your turn to speak'} />
+      <SourceRack sources={visibleSources} active={phase === 'live'}>
+        <VoiceOrbit state={orbitState} speaker={speakers.length === 1 ? speakers[0] : undefined} label={phase === 'closed' ? 'Interview complete' : phase === 'idle' ? 'Your place in the conversation' : speakers.length ? `${speakingLabel} speaking` : thinking || busy ? 'The panel is thinking' : muted ? 'Microphone muted' : 'Your turn to speak'} />
       </SourceRack>
       <FloorStrip decision={decision} />
 
@@ -754,14 +782,13 @@ export default function Gallery() {
       </div>
 
       <section className="session-record" aria-label="Session record">
-      <div className="record-heading"><div><span className="eyebrow">The conversation, captured</span><h2>Session record</h2></div><span className="record-note">Every perspective. Every piece of evidence.</span></div>
+      <div className="record-heading"><div><h2>Your conversation</h2><p>The conversation unfolds here. The panel keeps the thread.</p></div><span className="record-status" data-live={phase === 'live'}><i />{phase === 'live' ? 'Updating live' : phase === 'closed' ? 'Session complete' : 'Ready when you are'}</span></div>
       <div className="columns">
         <TranscriptFeed events={transcript} yieldedIds={yieldedIds} />
         <BriefPanel brief={brief} />
       </div>
 
       {assessment && <Report assessment={assessment} />}
-      <Ledger state={requirementState} />
       </section>
     </main>
   )

@@ -6,6 +6,7 @@
 import { AGENTS, type Brief, type FloorDecision, type TranscriptEvent } from '@/core/contracts'
 import { formatTimestamp } from '@/core/transcript'
 import type { Metrics } from '@/core/metrics'
+import { Icon } from '@/components/InterviewVisuals'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -43,21 +44,22 @@ export function TranscriptFeed({
   yieldedIds: ReadonlySet<string>
 }) {
   return (
-    <section className="column">
+    <section className="column transcript-column" aria-label="Conversation transcript">
       <div className="column-head">
-        <h2 className="column-title">Transcript</h2>
-        <span className="column-note">timestamped at capture</span>
+        <div className="column-identity"><Icon name="signal" /><div><h3 className="column-title">Conversation</h3><p>Every voice, in sequence</p></div></div>
+        <span className="column-count">{events.length} <span>entries</span></span>
       </div>
 
       {events.length === 0 ? (
-        <p className="empty">Nothing said yet. Run the rehearsed interview, or answer in your own words.</p>
+        <div className="record-empty"><div className="empty-thread" aria-hidden="true"><i /><i /><i /></div><h4>A space for every voice</h4><p>Start your interview. Questions and answers will appear here as the conversation unfolds.</p></div>
       ) : (
         events.map((event) => (
           <article key={event.id} className="turn" data-speaker={event.speaker}>
             <span className="turn-time">{formatTimestamp(event.tStart)}</span>
             <div>
               <div className="turn-who">
-                {event.speaker === 'candidate' ? 'Candidate' : AGENTS[event.speaker].displayName}
+                <span className="turn-avatar" aria-hidden="true"><Icon name={event.speaker === 'candidate' ? 'mic' : event.speaker} /></span>
+                {event.speaker === 'candidate' ? 'You' : AGENTS[event.speaker].displayName}
                 {yieldedIds.has(event.id) && <span className="turn-badge">yielded</span>}
               </div>
               <p className="turn-text">{event.text}</p>
@@ -73,40 +75,31 @@ export function TranscriptFeed({
 
 export function BriefPanel({ brief }: { brief: Brief }) {
   return (
-    <section className="column">
+    <section className="column notes-column" aria-label="Panel notes">
       <div className="column-head">
-        <h2 className="column-title">Shared brief</h2>
-        <span className="column-note">read by all three before they speak</span>
+        <div className="column-identity"><Icon name="focus" /><div><h3 className="column-title">Panel notes</h3><p>A shared thread across three perspectives</p></div></div>
+        <span className="notes-mark" aria-label="Shared by all three interviewers"><Icon name="technical" /><Icon name="product" /><Icon name="behavioural" /></span>
       </div>
 
       <div className="brief-stats">
         <div className="stat">
-          <div className="stat-label">Claims</div>
+          <div className="stat-label">Points captured</div>
           <div className="stat-value">{brief.claims.length}</div>
         </div>
         <div className="stat">
-          <div className="stat-label">Open flags</div>
+          <div className="stat-label">To explore</div>
           <div className="stat-value">{brief.flags.filter((f) => !f.addressed).length}</div>
         </div>
         <div className="stat">
-          <div className="stat-label">Difficulty</div>
-          <div className="stat-value">
-            {brief.difficulty}
-            <span className="difficulty" aria-hidden>
-              {[1, 2, 3, 4, 5].map((n) => (
-                <i key={n} data-on={n <= brief.difficulty} />
-              ))}
-            </span>
-          </div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">Turns</div>
+          <div className="stat-label">Answers</div>
           <div className="stat-value">{brief.turn}</div>
         </div>
       </div>
 
+      {brief.claims.length > 0 && <div className="captured-points"><h4>From your answers</h4>{brief.claims.slice(-3).map(claim => <div className="captured-point" key={claim.id}><time>{formatTimestamp(claim.tStart)}</time><p>{claim.text}</p></div>)}</div>}
+
       {brief.flags.length === 0 ? (
-        <p className="empty">No claims challenged yet.</p>
+        <div className="record-empty notes-empty"><Icon name="focus" /><h4>{brief.turn ? 'The panel is building context' : 'Your answers connect the dots'}</h4><p>{brief.turn ? 'Key points are captured above. Follow-up notes will appear when the panel has more to explore.' : 'Key points and follow-ups take shape here as the panel gets to know your work.'}</p></div>
       ) : (
         brief.flags.map((flag) => (
           <article key={flag.id} className="flag" data-addressed={flag.addressed}>

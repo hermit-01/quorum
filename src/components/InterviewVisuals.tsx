@@ -1,4 +1,24 @@
-import type { CSSProperties } from 'react'
+'use client'
+
+import { memo, useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
+import type { AgentId } from '@/core/contracts'
+
+/** Pause the room's repeating motion when it cannot be seen. */
+export function MotionSurface({ className, children }: { className: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    let inView = true
+    const update = () => { element.dataset.motion = inView && !document.hidden ? 'running' : 'paused' }
+    const observer = new IntersectionObserver(([entry]) => { inView = entry.isIntersecting; update() })
+    observer.observe(element)
+    document.addEventListener('visibilitychange', update)
+    update()
+    return () => { observer.disconnect(); document.removeEventListener('visibilitychange', update) }
+  }, [])
+  return <div ref={ref} className={className}>{children}</div>
+}
 
 type IconName = 'mic' | 'muted' | 'shield' | 'signal' | 'reset' | 'technical' | 'product' | 'behavioural' | 'clock' | 'focus' | 'arrow' | 'spark'
 
@@ -26,22 +46,42 @@ export function QuorumMark() {
   </svg>
 }
 
-/** A state animation, not an audio level meter. Only moves while the room is active. */
-export function VoiceOrbit({ active, muted, label }: { active: boolean; muted: boolean; label: string }) {
-  return <div className="voice-orbit" data-active={active} data-muted={muted}>
+export type OrbitState = 'idle' | 'closed' | 'speaking' | 'thinking' | 'muted' | 'listening'
+
+/** Patterns describe voice activity, not a calibrated volume meter. */
+export function VoiceOrbit({ state, speaker, label }: { state: OrbitState; speaker?: AgentId; label: string }) {
+  return <div className="voice-orbit" data-active={state !== 'idle' && state !== 'closed'} data-state={state} data-speaker={speaker}>
+    <OrbitLines />
+    <div className="orbit-core"><Icon name={state === 'speaking' ? speaker ?? 'signal' : state === 'thinking' ? 'spark' : state === 'muted' ? 'muted' : 'mic'} /></div>
+    <div className="orbit-caption" role="status"><span>{state === 'speaking' ? 'On the floor' : state === 'thinking' ? 'Connecting the dots' : state === 'listening' ? 'Listening to you' : state === 'muted' ? 'Take your time' : 'The conversation space'}</span><strong>{label}</strong></div>
+  </div>
+}
+
+const OrbitLines = memo(function OrbitLines() {
+  return (
     <svg className="orbit-lines" viewBox="0 0 500 500" fill="none" aria-hidden="true">
+      <g className="orbit-track"><circle cx="250" cy="250" r="225" stroke="currentColor" strokeDasharray="40 131 5 175" opacity=".5" /><circle cx="250" cy="25" r="3" fill="currentColor" /></g>
       {[210, 237].map(r => <circle key={r} cx="250" cy="250" r={r} stroke="currentColor" strokeDasharray="1 7" opacity=".16" />)}
+      <g className="orbit-filaments">
       {Array.from({ length: 22 }, (_, ring) => {
         const points = Array.from({ length: 241 }, (_, i) => {
           const a = i / 240 * Math.PI * 2
           const r = 151 + ring * 1.55 + Math.sin(a * 7 + ring * .16) * (7 + ring * .25) + Math.cos(a * 3 - ring * .12) * 9
           return `${i === 0 ? 'M' : 'L'}${(250 + Math.cos(a) * r).toFixed(2)},${(250 + Math.sin(a) * r).toFixed(2)}`
         }).join(' ')
-        return <path key={ring} d={`${points}Z`} stroke={ring % 6 === 0 ? '#c8b477' : 'currentColor'} strokeWidth=".65" opacity={.18 + ring % 5 * .065} />
+        return <path key={ring} d={`${points}Z`} stroke="currentColor" strokeWidth={ring % 6 === 0 ? '1' : '.65'} opacity={.23 + ring % 5 * .07} />
       })}
+      </g>
     </svg>
-    <div className="orbit-core"><Icon name={muted ? 'muted' : 'mic'} /></div>
-    <span className="orbit-caption">{label}</span>
+  )
+})
+
+/** Three voices, three signatures: cadence, expanding rings, conversational ripples. */
+export function AgentSignal({ agent }: { agent: AgentId }) {
+  return <div className="agent-signal" aria-hidden="true">
+    {agent === 'technical' ? <VoiceBars /> : <svg viewBox="0 0 200 48" fill="none">
+      {agent === 'product' ? [0, 1, 2, 3, 4].map(i => <ellipse className="signal-ring" key={i} cx="100" cy="24" rx={12 + i * 13} ry={6 + i * 3.5} stroke="currentColor" style={{ '--signal-delay': `${i * -.22}s` } as CSSProperties} />) : [0, 1, 2, 3, 4].map(i => <path className="signal-ripple" key={i} d={`M24 ${14 + i * 5} C50 ${-7 + i * 5}, 69 ${50 - i * 4}, 100 24 S150 ${-7 + i * 5}, 176 ${14 + i * 5}`} stroke="currentColor" style={{ '--signal-delay': `${i * -.18}s` } as CSSProperties} />)}
+    </svg>}
   </div>
 }
 

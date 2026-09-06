@@ -8,7 +8,7 @@
  */
 
 import { AGENTS, AGENT_IDS, type AgentId, type Bid } from '@/core/contracts'
-import { Icon, VoiceBars } from '@/components/InterviewVisuals'
+import { AgentSignal, Icon, MotionSurface } from '@/components/InterviewVisuals'
 import type { ReactNode } from 'react'
 
 export type SourceState = 'air' | 'bid' | 'idle'
@@ -25,13 +25,13 @@ export interface SourceView {
 /** Bids are unbounded in principle; this is only the width of the meter. */
 const BID_FULL_SCALE = 10
 
-export function SourceRack({ sources, children }: { sources: Record<AgentId, SourceView>; children?: ReactNode }) {
+export function SourceRack({ sources, children, active = true }: { sources: Record<AgentId, SourceView>; children?: ReactNode; active?: boolean }) {
   return (
-    <div className="rack">
+    <MotionSurface className="rack">
       {AGENT_IDS.map((id) => {
         const profile = AGENTS[id]
         const view = sources[id]
-        const label = view.state === 'air' ? 'On air' : view.state === 'bid' ? 'Bidding' : 'Standby'
+        const label = view.state === 'air' ? 'Speaking' : view.state === 'bid' ? 'Preparing' : active ? 'Listening' : 'Standby'
 
         return (
           <article key={id} className="source" data-agent={id} data-state={view.state}>
@@ -41,19 +41,19 @@ export function SourceRack({ sources, children }: { sources: Record<AgentId, Sou
               <span className="source-icon"><Icon name={id} /></span>
               <div className="source-identity">
                 <h2 className="source-name">{profile.displayName}</h2>
-              <span className="tally">
+              <span className="tally" role="status" aria-label={`${profile.displayName}: ${label}`}>
                 <i className="lamp" aria-hidden />
                 {label}
               </span>
               </div>
             </header>
 
-            <VoiceBars />
+            <AgentSignal agent={id} />
 
             <p className="source-role">{profile.role}</p>
 
             <p className="source-line" data-empty={view.line === ''}>
-              {view.line || 'Waiting for the floor.'}
+              {view.line || (view.state === 'air' ? 'Speaking to you…' : 'Waiting for the floor.')}
             </p>
 
             {view.bid && (
@@ -68,6 +68,6 @@ export function SourceRack({ sources, children }: { sources: Record<AgentId, Sou
         )
       })}
       {children}
-    </div>
+    </MotionSurface>
   )
 }
